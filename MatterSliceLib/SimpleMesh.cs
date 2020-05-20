@@ -147,6 +147,83 @@ namespace MatterHackers.MatterSlice
 			return true;
 		}
 
+		public static bool LoadModelFromStream(SimpleMeshCollection simpleModel, Stream stream, Matrix4X4 matrix)
+		{
+			if (!loadModelSTLStream_ascii(simpleModel, stream, matrix))
+			{
+				stream.Position = 0;
+				return loadModelSTLStream_binary(simpleModel, stream, matrix);
+			}
+
+			return true;
+		}
+
+		public static bool loadModelSTLStream_ascii(SimpleMeshCollection simpleModel, Stream stream, Matrix4X4 matrix)
+		{
+			SimpleMesh vol = new SimpleMesh();
+			using (StreamReader f = new StreamReader(stream))
+			{
+				// check for "SOLID"
+
+				var vertex = default(MatterHackers.VectorMath.Vector3);
+				int n = 0;
+				IntPoint v0 = new IntPoint(0, 0, 0);
+				IntPoint v1 = new IntPoint(0, 0, 0);
+				IntPoint v2 = new IntPoint(0, 0, 0);
+				string line = f.ReadLine();
+				Regex onlySingleSpaces = new Regex("\\s+", RegexOptions.Compiled);
+				int lineCount = 0;
+				while (line != null)
+				{
+					if (lineCount++ > 100 && vol.faceTriangles.Count == 0)
+					{
+						return false;
+					}
+
+					line = onlySingleSpaces.Replace(line, " ");
+					var parts = line.Trim().Split(' ');
+					if (parts[0].Trim() == "vertex")
+					{
+						vertex.X = Convert.ToDouble(parts[1]);
+						vertex.Y = Convert.ToDouble(parts[2]);
+						vertex.Z = Convert.ToDouble(parts[3]);
+
+						// change the scale from mm to micrometers
+						n++;
+						switch (n)
+						{
+							case 1:
+								var new0 = VectorMath.Vector3Ex.Transform(vertex, matrix) * 1000;
+								v0 = new IntPoint(new0.X, new0.Y, new0.Z);
+								break;
+
+							case 2:
+								var new1 = VectorMath.Vector3Ex.Transform(vertex, matrix) * 1000;
+								v1 = new IntPoint(new1.X, new1.Y, new1.Z);
+								break;
+
+							case 3:
+								var new2 = VectorMath.Vector3Ex.Transform(vertex, matrix) * 1000;
+								v2 = new IntPoint(new2.X, new2.Y, new2.Z);
+								vol.addFaceTriangle(v0, v1, v2);
+								n = 0;
+								break;
+						}
+					}
+
+					line = f.ReadLine();
+				}
+			}
+
+			if (vol.faceTriangles.Count > 3)
+			{
+				simpleModel.SimpleMeshes.Add(vol);
+				return true;
+			}
+
+			return false;
+		}
+
 		public static bool loadModelSTL_ascii(SimpleMeshCollection simpleModel, string filename, Matrix4X4 matrix)
 		{
 			SimpleMesh vol = new SimpleMesh();
@@ -255,6 +332,74 @@ namespace MatterHackers.MatterSlice
 			}
 
 			return minXYZ;
+		}
+
+		private static bool loadModelSTLStream_binary(SimpleMeshCollection simpleModel, Stream stlStream, Matrix4X4 matrix)
+		{
+			SimpleMesh vol = new SimpleMesh();
+
+			// load it as a binary stl
+			// skip the first 80 bytes
+			// read in the number of triangles
+			stlStream.Position = 0;
+			BinaryReader br = new BinaryReader(stlStream);
+			byte[] fileContents = br.ReadBytes((int)stlStream.Length);
+			int currentPosition = 80;
+			if (fileContents.Length < currentPosition)
+			{
+				return false;
+			}
+
+			uint numTriangles = System.BitConverter.ToUInt32(fileContents, currentPosition);
+			long bytesForNormals = numTriangles * 3 * 4;
+			long bytesForVertices = numTriangles * 3 * 4;
+			long bytesForAttributs = numTriangles * 2;
+			currentPosition += 4;
+			long numBytesRequiredForVertexData = currentPosition + bytesForNormals + bytesForVertices + bytesForAttributs;
+			if (fileContents.Length < numBytesRequiredForVertexData || numTriangles < 0)
+			{
+				stlStream.Close();
+				return false;
+			}
+
+			IntPoint[] vector = new IntPoint[3];
+			for (int i = 0; i < numTriangles; i++)
+			{
+				// skip the normal
+				currentPosition += 3 * 4;
+				for (int j = 0; j < 3; j++)
+				{
+					var vertex = new MatterHackers.VectorMath.Vector3(
+						System.BitConverter.ToSingle(fileContents, currentPosition + 0 * 4),
+						System.BitConverter.ToSingle(fileContents, currentPosition + 1 * 4),
+						System.BitConverter.ToSingle(fileContents, currentPosition + 2 * 4));
+
+					var new0 = VectorMath.Vector3Ex.Transform(vertex, matrix);
+					vector[j] = new IntPoint(new0.X * 1000, new0.Y * 1000, new0.Z * 1000);
+					currentPosition += 3 * 4;
+				}
+
+				currentPosition += 2; // skip the attribute
+
+				vol.addFaceTriangle(vector[2], vector[1], vector[0]);
+			}
+
+
+			// Detect and skip non-visible mesh
+			var bounds = vol.maxXYZ_um() - vol.minXYZ_um();
+
+			if (vol.faceTriangles.Count > 0)
+			{
+				if (bounds.X == 0)
+				{
+					vol.faceTriangles = new List<SimpleFace>();
+				}
+
+				simpleModel.SimpleMeshes.Add(vol);
+				return true;
+			}
+
+			return false;
 		}
 
 		private static bool loadModelSTL_binary(SimpleMeshCollection simpleModel, string filename, Matrix4X4 matrix)

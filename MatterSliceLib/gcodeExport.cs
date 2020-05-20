@@ -202,6 +202,11 @@ namespace MatterHackers.MatterSlice
 			gcodeFileStream = new StreamWriter(filename);
 		}
 
+		public void SetOutputStream(Stream outputStream)
+		{
+			gcodeFileStream = new StreamWriter(outputStream);
+		}
+
 		public void SetLayerChangeCode(string layerChangeCode)
 		{
 			this.layerChangeCode = layerChangeCode;
